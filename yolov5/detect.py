@@ -66,7 +66,7 @@ from utils.general import (
 from utils.torch_utils import select_device, smart_inference_mode
 
 # ===== 수정 1: changedetection import 추가 =====
-from changedetection import ChangeDetection  # added by kiokahn
+from changedetection import ChangeDetection  
 
 
 @smart_inference_mode()

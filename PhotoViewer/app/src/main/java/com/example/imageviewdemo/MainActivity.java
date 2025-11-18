@@ -3,7 +3,10 @@ package com.example.imageviewdemo;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -31,10 +34,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -48,14 +48,13 @@ public class MainActivity extends AppCompatActivity {
     private ActivityMainBinding binding;
 
     // 로컬 사이트
-    // private String site_url = "http://10.0.2.2:8000";
+    private String site_url = "http://10.0.2.2:8000";
 
     // 파이썬 애니웨어 사이트
-    private String site_url = "https://ksw090711.pythonanywhere.com";
+    // private String site_url = "https://ksw090711.pythonanywhere.com";
     private String token = "e3acd79499b1bdc8d155861abed9728849a5556f";
     private CloadImage taskDownload;
 
-    private static final int PICK_IMAGE_REQUEST = 100;
     private Uri selectedImageUri;
     private AlertDialog uploadDialog;
     
@@ -63,6 +62,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean isAscending = false;
     private boolean isDarkMode = false;
     private SharedPreferences sharedPreferences;
+    
+    // ActivityResultLauncher for image picker
+    private ActivityResultLauncher<Intent> imagePickerLauncher;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -76,10 +78,41 @@ public class MainActivity extends AppCompatActivity {
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
+        // 이미지 선택을 위한 ActivityResultLauncher 초기화
+        imagePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    selectedImageUri = result.getData().getData();
+                    
+                    if (uploadDialog != null && uploadDialog.isShowing()) {
+                        ImageView previewImage = uploadDialog.findViewById(R.id.preview_image);
+                        if (previewImage != null && selectedImageUri != null) {
+                            try {
+                                Bitmap bitmap = MediaStore.Images.Media.getBitmap(getContentResolver(), selectedImageUri);
+                                previewImage.setImageBitmap(bitmap);
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                    }
+                }
+            }
+        );
+
         // 동기화 버튼
         binding.btnLoad.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                onClickDownload();
+            }
+        });
+
+        // Pull-to-refresh 설정
+        binding.swipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
+            @Override
+            public void onRefresh() {
+                // 새로고침 시작
                 onClickDownload();
             }
         });
@@ -181,6 +214,12 @@ public class MainActivity extends AppCompatActivity {
         Toast.makeText(getApplicationContext(), "Download 시작", Toast.LENGTH_SHORT).show();
     }
 
+    private void stopRefreshAnimation() {
+        if (binding.swipeRefreshLayout != null) {
+            binding.swipeRefreshLayout.setRefreshing(false);
+        }
+    }
+
     private void onClickUpload() {
         showUploadDialog();
     }
@@ -205,7 +244,7 @@ public class MainActivity extends AppCompatActivity {
             public void onClick(View v) {
                 Intent intent = new Intent(Intent.ACTION_PICK);
                 intent.setType("image/*");
-                startActivityForResult(intent, PICK_IMAGE_REQUEST);
+                imagePickerLauncher.launch(intent);
             }
         });
 
@@ -247,27 +286,6 @@ public class MainActivity extends AppCompatActivity {
         });
 
         uploadDialog.show();
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        if (requestCode == PICK_IMAGE_REQUEST && resultCode == RESULT_OK && data != null) {
-            selectedImageUri = data.getData();
-
-            if (uploadDialog != null && uploadDialog.isShowing()) {
-                ImageView previewImage = uploadDialog.findViewById(R.id.preview_image);
-                if (previewImage != null) {
-                    try {
-                        Bitmap bitmap = MediaStore.Images.Media.getBitmap(getContentResolver(), selectedImageUri);
-                        previewImage.setImageBitmap(bitmap);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-            }
-        }
     }
 
     private class CloadImage extends AsyncTask<String, Integer, List<Post>> {
@@ -314,11 +332,24 @@ public class MainActivity extends AppCompatActivity {
                         Bitmap imageBitmap = null;
                         if (!imageUrl.isEmpty() && !imageUrl.equals("null")) {
                             try {
-                                URL myImageUrl = new URL(imageUrl);
+                                // 상대 경로인 경우 절대 경로로 변환
+                                String fullImageUrl = imageUrl;
+                                if (!imageUrl.startsWith("http://") && !imageUrl.startsWith("https://")) {
+                                    if (imageUrl.startsWith("/")) {
+                                        fullImageUrl = site_url + imageUrl;
+                                    } else {
+                                        fullImageUrl = site_url + "/" + imageUrl;
+                                    }
+                                }
+                                
+                                URL myImageUrl = new URL(fullImageUrl);
                                 HttpURLConnection imgConn = (HttpURLConnection) myImageUrl.openConnection();
+                                imgConn.setConnectTimeout(5000);
+                                imgConn.setReadTimeout(5000);
                                 InputStream imgStream = imgConn.getInputStream();
                                 imageBitmap = BitmapFactory.decodeStream(imgStream);
                                 imgStream.close();
+                                imgConn.disconnect();
                             } catch (Exception e) {
                                 e.printStackTrace();
                             }
@@ -340,6 +371,9 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         protected void onPostExecute(List<Post> posts) {
+            // Pull-to-refresh 애니메이션 중지
+            stopRefreshAnimation();
+
             if (posts == null || posts.isEmpty()) {
                 binding.textView.setText("불러올 이미지가 없습니다.\n서버와 토큰을 확인하세요.");
             } else {
@@ -353,10 +387,25 @@ public class MainActivity extends AppCompatActivity {
                 postAdapter.setOnItemClickListener(new PostAdapter.OnItemClickListener() {
                     @Override
                     public void onItemClick(Post post) {
+                        // 이미지 URL을 절대 경로로 변환
+                        String imageUrl = post.getImageUrl();
+                        String fullImageUrl = imageUrl;
+                        if (!imageUrl.isEmpty() && !imageUrl.equals("null")) {
+                            if (!imageUrl.startsWith("http://") && !imageUrl.startsWith("https://")) {
+                                if (imageUrl.startsWith("/")) {
+                                    fullImageUrl = site_url + imageUrl;
+                                } else {
+                                    fullImageUrl = site_url + "/" + imageUrl;
+                                }
+                            } else {
+                                fullImageUrl = imageUrl;
+                            }
+                        }
+                        
                         Intent intent = new Intent(MainActivity.this, ImageDetailActivity.class);
                         intent.putExtra("title", post.getTitle());
                         intent.putExtra("text", post.getText());
-                        intent.putExtra("imageUrl", post.getImageUrl());
+                        intent.putExtra("imageUrl", fullImageUrl);
                         startActivity(intent);
                     }
                 });

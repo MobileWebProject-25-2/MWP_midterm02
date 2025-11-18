@@ -63,7 +63,10 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.PostViewHolder
 
         holder.deleteButton.setOnClickListener(v -> {
             if (onDeleteClickListener != null) {
-                onDeleteClickListener.onDeleteClick(post, holder.getAdapterPosition());
+                int adapterPosition = holder.getBindingAdapterPosition();
+                if (adapterPosition != RecyclerView.NO_POSITION) {
+                    onDeleteClickListener.onDeleteClick(post, adapterPosition);
+                }
             }
         });
     }
